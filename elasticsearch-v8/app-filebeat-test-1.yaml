@@ -1,0 +1,98 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nginx-1-log
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: nfs
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: filebeat-nginx-1-config
+data:
+  filebeat.yml: |
+    filebeat.inputs:
+      - type: log
+        paths:
+          - /var/log/nginx/access.log
+        fields:
+          application: "nginx-1-access-log"
+        multiline.pattern: '^[[:space:]]'
+        multiline.negate: false
+        multiline.match: after
+      - type: log
+        paths:
+          - /var/log/nginx/error.log
+        fields:
+          application: "nginx-1-error-log"
+        multiline.pattern: '^[[:space:]]'
+        multiline.negate: false
+        multiline.match: after
+      - type: log
+        paths:
+          - /var/log/custom/*.log
+        fields:
+          application: "nginx-1-custom-error-log"
+        multiline.pattern: '^[[:space:]]'
+        multiline.negate: false
+        multiline.match: after
+
+    # output.elasticsearch:
+    #   hosts: ["http://elasticsearch:9200"]
+    #   username: "elastic" 
+    #   password: "changeme"
+
+    output.logstash:
+      hosts: ["logstash.vutd.svc:5044"]
+
+    logging:
+      level: info
+      to_files: false
+      # files:
+      #   path: /var/log/filebeat
+      #   name: filebeat
+      #   keepfiles: 7
+      #   permissions: 0644
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    run: nginx-1
+  name: nginx-1
+spec:
+  volumes:
+  - name: custom-log
+    emptyDir: {}
+  - name: nginx-log
+    persistentVolumeClaim:
+      claimName: nginx-1-log
+  - name: filebeat-nginx-config
+    configMap:
+      name: filebeat-nginx-1-config
+  containers:
+  - image: nginx
+    name: nginx-1
+    volumeMounts:
+    - name: nginx-log
+      mountPath: /var/log/nginx
+    - name: custom-log
+      mountPath: /var/log/custom
+  - name: filebeat
+    image: docker.elastic.co/beats/filebeat:8.10.0
+    volumeMounts:
+    - name: filebeat-nginx-config
+      mountPath: /usr/share/filebeat/filebeat.yml
+      subPath: filebeat.yml
+    - name: nginx-log
+      mountPath: /var/log/nginx
+    - name: custom-log
+      mountPath: /var/log/custom
+  dnsPolicy: ClusterFirst
+  restartPolicy: Always
+status: {}

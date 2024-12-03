@@ -1,0 +1,163 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-config
+  # namespace: logging
+data:
+  logstash.conf: |
+    input {
+      beats {
+        port => 5044
+      }
+    }
+
+    filter {
+      # if [fields][application] == "nginx-access-log" or  [fields][application] == "nginx-error-log" {
+      #   mutate {
+      #     add_field => { "log_type" => "nginx" }
+      #   }
+
+      #   grok {
+      #     match => { "message" => "%{COMBINEDAPACHELOG}" }
+      #   }
+      # }
+      # if [fields][application] == "nginx-1-access-log" or  [fields][application] == "nginx-1-error-log" {
+      #   mutate {
+      #     add_field => { "log_type" => "nginx-1" }
+      #   }
+
+      #   grok {
+      #     match => { "message" => "%{COMBINEDAPACHELOG}" }
+      #   }
+      # }
+
+      geoip {
+        source => "[source][address]"
+        target => "[source]"
+      }
+
+      # if ([fields][application] == "nginx-1-custom-error-log") and ("ERROR" in [message]) {
+      #   mutate {
+      #     add_field => { "log_type" => "nginx-1-custom-error-log" }
+      #   }   
+      # }
+      if ([message] =~ /^ERROR/) or ([message] =~ /FAILED$/) {
+        mutate {
+          add_field => { "log_type" => "nginx-1-custom-error-log" }
+        }
+      }
+      else {
+        drop { }
+      }
+
+
+    }
+
+    output {
+      ## SETTING FOR DATASTREAM
+      # elasticsearch {
+      #   hosts => ["http://elasticsearch:9200"]
+      #   data_stream => true
+      #   # user => "elastic"        
+      #   # password => "changeme"
+      # }
+
+      ## SETTING FOR INDEX
+      # elasticsearch {
+      #   hosts => ["http://elasticsearch:9200"]
+      #   index => "filebeat-%{+YYYY.MM.dd}"
+      #   # user => "elastic"        
+      #   # password => "changeme"
+      # }
+      
+      ## MULTI LOG_TYPE IN DATASTREAM
+      # if [log_type] == "nginx" {
+      #   elasticsearch {
+      #     hosts => ["http://elasticsearch:9200"]
+      #     data_stream => true
+      #   }
+      # }
+      # if [log_type] == "nginx-1" {
+      #   elasticsearch {
+      #     hosts => ["http://elasticsearch:9200"]
+      #     data_stream => true
+      #   }
+      # }
+
+      # ## MULTI LOG_TYPE IN MULTI INDEX
+      # if [log_type] == "nginx" {
+      #   elasticsearch {
+      #     #template_api => legacy
+      #     hosts => ["http://elasticsearch:9200"]
+      #     index => "nginx-%{+YYYY.MM.dd}"
+      #   }
+      # }
+      # if [log_type] == "nginx-1" {
+      #   elasticsearch {
+      #     #template_api => legacy
+      #     hosts => ["http://elasticsearch:9200"]
+      #     index => "nginx-1-%{+YYYY.MM.dd}"
+      #   }
+      # }
+      if [log_type] == "nginx-1-custom-error-log" {
+        elasticsearch {
+          #template_api => legacy
+          hosts => ["http://elasticsearch:9200"]
+          # index => "nginx-1-custom-error-%{+YYYY.MM.dd}"
+          index => "nginx-1-custom-error"
+          ilm_enabled => true
+          ilm_rollover_alias => "nginx-1-custom-error"
+          ilm_policy => "custom-retention"
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash
+  # namespace: logging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: logstash
+  template:
+    metadata:
+      labels:
+        app: logstash
+    spec:
+      containers:
+        - name: logstash
+          image: docker.elastic.co/logstash/logstash:8.10.0
+          ports:
+            - containerPort: 5044
+          volumeMounts:
+            - name: logstash-config
+              mountPath: /usr/share/logstash/pipeline/logstash.conf
+              subPath: logstash.conf
+      volumes:
+        - name: logstash-config
+          configMap:
+            name: logstash-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # namespace: logging
+  name: logstash
+spec:
+  ports:
+  - port: 5044
+    protocol: TCP
+    targetPort: 5044
+    name: allow-tcp
+  - port: 5044
+    protocol: UDP
+    targetPort: 5044
+    name: allow-udp
+  selector:
+    app: logstash
+status:
+  loadBalancer: {}
+
