@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-config
+  namespace: logging
+data:
+  logstash.conf: |
+    input {
+      beats {
+        port => 5044
+      }
+    }
+
+    filter {
+
+      geoip {
+        source => "[source][address]"
+        target => "[source]"
+      }
+
+    }
+
+    output {
+      ## SETTING FOR DATASTREAM
+      elasticsearch {
+        hosts => ["http://elasticsearch:9200"]
+        data_stream => true
+        # user => "elastic"        
+        # password => "changeme"
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash
+  namespace: logging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: logstash
+  template:
+    metadata:
+      labels:
+        app: logstash
+    spec:
+      containers:
+        - name: logstash
+          image: docker.elastic.co/logstash/logstash:8.15.3
+          ports:
+            - containerPort: 5044
+          volumeMounts:
+            - name: logstash-config
+              mountPath: /usr/share/logstash/pipeline/logstash.conf
+              subPath: logstash.conf
+      volumes:
+        - name: logstash-config
+          configMap:
+            name: logstash-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: logging
+  name: logstash
+spec:
+  ports:
+  - port: 5044
+    protocol: TCP
+    targetPort: 5044
+    name: allow-tcp
+  - port: 5044
+    protocol: UDP
+    targetPort: 5044
+    name: allow-udp
+  selector:
+    app: logstash
+status:
+  loadBalancer: {}

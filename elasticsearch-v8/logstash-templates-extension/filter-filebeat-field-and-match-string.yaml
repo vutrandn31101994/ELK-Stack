@@ -1,0 +1,96 @@
+###########################  
+# In this example:
+# - 1 filebeat send application log to lagtash with field "application: nginx-1-custom-error-log"
+# - String match "ERROR" => Send to Elasticsearch, Not match => Drop
+# - Log will storage in 2 index format with timestamp "YYYY.MM.dd"
+#   + "application: nginx-1-custom-error-log" => Index "nginx-1-custom-error-%{+YYYY.MM.dd}"
+########################### 
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: logstash-config
+  namespace: logging
+data:
+  logstash.conf: |
+    input {
+      beats {
+        port => 5044
+      }
+    }
+
+    filter {
+
+      if ([fields][application] == "nginx-1-custom-error-log") and ("ERROR" in [message]) {
+        mutate {
+          add_field => { "log_type" => "nginx-1-custom-error-log" }
+        }   
+      }
+      else {
+        drop { }
+      }
+
+      geoip {
+        source => "[source][address]"
+        target => "[source]"
+      }
+
+    }
+
+    output {
+      if [log_type] == "nginx-1-custom-error-log" {
+        elasticsearch {
+          hosts => ["http://elasticsearch:9200"]
+          index => "nginx-1-custom-error-%{+YYYY.MM.dd}"
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: logstash
+  namespace: logging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: logstash
+  template:
+    metadata:
+      labels:
+        app: logstash
+    spec:
+      containers:
+        - name: logstash
+          image: docker.elastic.co/logstash/logstash:8.15.3
+          ports:
+            - containerPort: 5044
+          volumeMounts:
+            - name: logstash-config
+              mountPath: /usr/share/logstash/pipeline/logstash.conf
+              subPath: logstash.conf
+      volumes:
+        - name: logstash-config
+          configMap:
+            name: logstash-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: logging
+  name: logstash
+spec:
+  ports:
+  - port: 5044
+    protocol: TCP
+    targetPort: 5044
+    name: allow-tcp
+  - port: 5044
+    protocol: UDP
+    targetPort: 5044
+    name: allow-udp
+  selector:
+    app: logstash
+status:
+  loadBalancer: {}
